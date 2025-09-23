@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Headline Copier — PWA</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#ffcc00"/>
+  <style>
+    :root{
+      --bg:#fff;
+      --primary:#ffcc00;
+      --muted:#666;
+      --card:#fafafa;
+      --accent:#333;
+    }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; background:var(--bg); margin:0; padding:1rem; color:var(--accent)}
+    header{display:flex;gap:.5rem;align-items:center;margin-bottom:1rem}
+    .logo{width:44px;height:44px;border-radius:8px;background:var(--primary);display:flex;align-items:center;justify-content:center;font-weight:700}
+    h1{font-size:1.05rem;margin:0}
+    p.small{color:var(--muted);margin:0;font-size:.9rem}
+    .card{background:var(--card);padding:12px;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,.06);margin-bottom:12px}
+    input[type="url"]{width:100%;padding:10px;border-radius:8px;border:1px solid #eee;font-size:0.95rem}
+    .row{display:flex;gap:.5rem;margin-top:.5rem}
+    button{background:var(--primary);border:none;padding:10px 12px;border-radius:8px;font-weight:600;cursor:pointer}
+    button.gray{background:#e9e9e9;color:#333}
+    .result{margin-top:12px}
+    .headline{font-weight:600;margin-bottom:6px}
+    .link{color:#0077cc;font-size:.95rem;word-break:break-all}
+    .actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:8px}
+    .hint{font-size:.85rem;color:var(--muted);margin-top:8px}
+    footer{margin-top:18px;font-size:.85rem;color:var(--muted)}
+    .big {width:100%}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">HC</div>
+    <div>
+      <h1>Headline Copier</h1>
+      <p class="small">URL paste karein ya share se bhejein → headline & link copy karein</p>
+    </div>
+  </header>
+
+  <div class="card">
+    <label for="url">Article / News URL</label>
+    <input id="url" type="url" inputmode="url" placeholder="https://example.com/..." />
+    <div class="row">
+      <button id="extract" class="big">Extract</button>
+      <button id="pasteClipboard" class="gray">Paste URL</button>
+    </div>
+    <div class="hint">Tip: aap browser ke Share → "Headline Copier" se directly bhej sakte hain (Android).</div>
+  </div>
+
+  <div id="resultWrap" class="card" style="display:none">
+    <div class="headline" id="headlineText"></div>
+    <div class="link" id="linkText"></div>
+    <div class="actions">
+      <button id="copyHeadline">Copy Headline</button>
+      <button id="copyPlain">Copy Headline + Link</button>
+      <button id="copyHtml" class="gray">Copy as HTML &lt;a&gt;</button>
+      <button id="openLink" class="gray">Open Link</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="small">Or fetch from RSS feed (paste RSS URL in the input and Extract)</div>
+  </div>
+
+  <footer>
+    <div>Privacy: Is app me content aapke device par parse hota hai. Public proxy <code>allorigins.win</code> use hota hai for CORS. For maximum privacy, host your own proxy (instructions available).</div>
+  </footer>
+
+<script>
+/*
+  Headline Copier PWA (client-side)
+  - Uses allorigins proxy for CORS: https://api.allorigins.win/raw?url=
+  - Tries to read <meta property="og:title">, <title>, and <link rel="canonical">
+  - Supports pasting URL, or being a share target (handled by service worker + manifest)
+*/
+
+const input = document.getElementById('url');
+const extractBtn = document.getElementById('extract');
+const pasteBtn = document.getElementById('pasteClipboard');
+const resultWrap = document.getElementById('resultWrap');
+const headlineText = document.getElementById('headlineText');
+const linkText = document.getElementById('linkText');
+const copyHeadlineBtn = document.getElementById('copyHeadline');
+const copyPlainBtn = document.getElementById('copyPlain');
+const copyHtmlBtn = document.getElementById('copyHtml');
+const openLinkBtn = document.getElementById('openLink');
+
+const CORS_PROXY = 'https://api.allorigins.win/raw?url='; // public proxy
+
+async function extractFromUrl(url){
+  if(!url) return alert('Please enter URL');
+  // quick normalize
+  try { new URL(url); } catch(e){ alert('Invalid URL'); return; }
+
+  headlineText.textContent = 'Loading…';
+  linkText.textContent = url;
+  resultWrap.style.display = 'block';
+  try {
+    const resp = await fetch(CORS_PROXY + encodeURIComponent(url));
+    if(!resp.ok) throw new Error('Network fetch failed');
+    const html = await resp.text();
+    // parse
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    // Try meta og:title first
+    let title = doc.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
+                doc.querySelector('meta[name="og:title"]')?.getAttribute('content') ||
+                doc.querySelector('meta[name="twitter:title"]')?.getAttribute('content') ||
+                doc.querySelector('title')?.textContent ||
+                '';
+    title = (title || '').trim();
+
+    // canonical link
+    let canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || url;
+
+    // fallback: try first h1 candidate
+    if(!title){
+      const h1 = doc.querySelector('h1');
+      if(h1) title = h1.textContent.trim();
+    }
+
+    if(!title){
+      headlineText.textContent = 'Unable to extract headline';
+      return;
+    }
+
+    headlineText.textContent = title;
+    linkText.textContent = canonical;
+    linkText.href = canonical;
+    // store in dataset
+    resultWrap.dataset.url = canonical;
+    resultWrap.dataset.title = title;
+
+  } catch(err){
+    headlineText.textContent = 'Error: ' + (err.message || err);
+    linkText.textContent = url;
+    resultWrap.dataset.url = url;
+  }
+}
+
+extractBtn.addEventListener('click', ()=> extractFromUrl(input.value.trim()));
+
+pasteBtn.addEventListener('click', async ()=>{
+  // paste from clipboard (user gesture required)
+  try {
+    const text = await navigator.clipboard.readText();
+    input.value = text || input.value;
+  } catch(e){
+    alert('Cannot read clipboard. Try long-press paste or grant permission.');
+  }
+});
+
+copyHeadlineBtn.addEventListener('click', async ()=>{
+  const t = resultWrap.dataset.title || headlineText.textContent;
+  if(!t) return alert('No headline to copy');
+  try{ await navigator.clipboard.writeText(t); alert('Headline copied'); }catch(e){ prompt('Copy this headline:', t); }
+});
+
+copyPlainBtn.addEventListener('click', async ()=>{
+  const t = resultWrap.dataset.title || headlineText.textContent;
+  const u = resultWrap.dataset.url || linkText.textContent;
+  const text = t + '\n' + u;
+  try{ await navigator.clipboard.writeText(text); alert('Copied headline + link'); }catch(e){ prompt('Copy text:', text); }
+});
+
+copyHtmlBtn.addEventListener('click', async ()=>{
+  const t = resultWrap.dataset.title || headlineText.textContent;
+  const u = resultWrap.dataset.url || linkText.textContent;
+  const html = `<a href="${u}" target="_blank">${t}</a>`;
+  try{ await navigator.clipboard.writeText(html); alert('Copied HTML link'); }catch(e){ prompt('Copy HTML:', html); }
+});
+
+openLinkBtn.addEventListener('click', ()=>{
+  const u = resultWrap.dataset.url || linkText.textContent;
+  if(u) window.open(u, '_blank');
+});
+
+// INSTALL SERVICE WORKER
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js').then(reg=>{
+    // console.log('sw reg', reg);
+  }).catch(()=>{});
+}
+
+// HANDLE share_target results (if posted by SW)
+async function handlePendingSharedData(){
+  // service worker may store shared data in clients via postMessage; simpler: check URL params
+  const params = new URLSearchParams(location.search);
+  const s = params.get('shared-url') || params.get('url');
+  if(s){
+    input.value = s;
+    extractFromUrl(s);
+    // remove params from URL (history)
+    history.replaceState({}, document.title, location.pathname);
+  }
+}
+handlePendingSharedData();
+
+</script>
+</body>
+</html>
