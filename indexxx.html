@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Headline Copier — PWA</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#ffcc00"/>
+  <style>
+    :root{
+      --bg:#fff;
+      --primary:#ffcc00;
+      --muted:#666;
+      --card:#fafafa;
+      --accent:#222;
+    }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;padding:1rem;background:var(--bg);color:var(--accent)}
+    header{display:flex;gap:.5rem;align-items:center;margin-bottom:1rem}
+    .logo{width:44px;height:44px;border-radius:8px;background:var(--primary);display:flex;align-items:center;justify-content:center;font-weight:700}
+    h1{font-size:1.05rem;margin:0}
+    p.small{color:var(--muted);margin:0;font-size:.9rem}
+    .card{background:var(--card);padding:12px;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,.06);margin-bottom:12px}
+    input[type="url"]{width:100%;padding:10px;border-radius:8px;border:1px solid #eee;font-size:0.95rem}
+    .row{display:flex;gap:.5rem;margin-top:.5rem}
+    button{background:var(--primary);border:none;padding:10px 12px;border-radius:8px;font-weight:600;cursor:pointer}
+    button.gray{background:#e9e9e9;color:#333}
+    .result{margin-top:12px}
+    .headline{font-weight:600;margin-bottom:6px}
+    .link{color:#0077cc;font-size:.95rem;word-break:break-all}
+    .actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:8px}
+    footer{margin-top:18px;font-size:.85rem;color:var(--muted)}
+    .big{flex:1}
+    table{width:100%;border-collapse:collapse;font-size:.95rem}
+    th,td{padding:8px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
+    .smallBtn{padding:6px 8px;border-radius:6px;font-weight:600}
+    .danger{background:#ff6b6b;color:#fff}
+    .muted{color:var(--muted);font-size:.85rem}
+    @media (min-width:720px){ .row{flex-wrap:nowrap} }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">HC</div>
+    <div>
+      <h1>Headline Copier</h1>
+      <p class="small">URL paste karein ya Share se bhejein → headline extract karen → Save / CSV download</p>
+    </div>
+  </header>
+
+  <div class="card">
+    <label for="url">Article / News URL</label>
+    <input id="url" type="url" inputmode="url" placeholder="https://example.com/..." />
+    <div class="row" style="margin-top:8px">
+      <button id="extract" class="big">Extract</button>
+      <button id="pasteClipboard" class="gray">Paste URL</button>
+    </div>
+
+    <div id="resultWrap" class="result" style="display:none;margin-top:12px">
+      <div class="headline" id="headlineText"></div>
+      <div class="link" id="linkText"></div>
+
+      <div class="actions">
+        <button id="copyHeadline" class="smallBtn">Copy Headline</button>
+        <button id="copyPlain" class="smallBtn gray">Copy Headline + Link</button>
+        <button id="copyHtml" class="smallBtn gray">Copy as HTML &lt;a&gt;</button>
+        <button id="saveItem" class="smallBtn">Save to list</button>
+        <button id="openLink" class="smallBtn gray">Open Link</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div><strong>Saved Headlines</strong> <span id="count" class="muted"></span></div>
+      <div style="display:flex;gap:.5rem">
+        <button id="downloadCsv" class="smallBtn gray">Download CSV</button>
+        <button id="clearAll" class="smallBtn danger">Clear All</button>
+      </div>
+    </div>
+
+    <div style="margin-top:8px; overflow:auto">
+      <table id="itemsTable">
+        <thead>
+          <tr><th>Headline</th><th>Link</th><th style="width:90px">Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer class="muted">
+    Privacy: Entries only aapke device me localStorage me store hote hain. App HTML fetch ke liye public proxy <code>allorigins.win</code> use karta hai (CORS). Private proxy chahiye to batao.
+  </footer>
+
+<script>
+const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+
+const input = document.getElementById('url');
+const extractBtn = document.getElementById('extract');
+const pasteBtn = document.getElementById('pasteClipboard');
+
+const resultWrap = document.getElementById('resultWrap');
+const headlineText = document.getElementById('headlineText');
+const linkText = document.getElementById('linkText');
+
+const copyHeadlineBtn = document.getElementById('copyHeadline');
+const copyPlainBtn = document.getElementById('copyPlain');
+const copyHtmlBtn = document.getElementById('copyHtml');
+const openLinkBtn = document.getElementById('openLink');
+const saveItemBtn = document.getElementById('saveItem');
+
+const itemsTableBody = document.querySelector('#itemsTable tbody');
+const downloadCsvBtn = document.getElementById('downloadCsv');
+const clearAllBtn = document.getElementById('clearAll');
+const countEl = document.getElementById('count');
+
+let current = { title: '', url: '' };
+
+// UTIL: read/write localStorage
+function loadItems(){
+  try {
+    return JSON.parse(localStorage.getItem('hc_items') || '[]');
+  } catch(e){ return []; }
+}
+function saveItems(items){
+  localStorage.setItem('hc_items', JSON.stringify(items));
+}
+function renderTable(){
+  const items = loadItems();
+  itemsTableBody.innerHTML = '';
+  items.forEach((it, idx) => {
+    const tr = document.createElement('tr');
+    const tdTitle = document.createElement('td');
+    tdTitle.innerHTML = `<a href="${escapeHtml(it.url)}" target="_blank">${escapeHtml(it.title)}</a>`;
+    const tdLink = document.createElement('td');
+    tdLink.textContent = it.url;
+    const tdAction = document.createElement('td');
+    tdAction.innerHTML = `<button data-idx="${idx}" class="smallBtn gray" data-action="copy">Copy</button>
+                          <button data-idx="${idx}" class="smallBtn danger" data-action="delete">Del</button>`;
+    tr.appendChild(tdTitle);
+    tr.appendChild(tdLink);
+    tr.appendChild(tdAction);
+    itemsTableBody.appendChild(tr);
+  });
+  countEl.textContent = items.length ? '('+items.length+')' : '';
+}
+
+// simple escape
+function escapeHtml(s){ return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+// EXTRACT
+async function extractFromUrl(url){
+  if(!url) return alert('Please enter URL');
+  try { new URL(url); } catch(e){ alert('Invalid URL'); return; }
+
+  headlineText.textContent = 'Loading…';
+  linkText.textContent = url;
+  resultWrap.style.display = 'block';
+  current = { title: '', url };
+
+  try {
+    const resp = await fetch(CORS_PROXY + encodeURIComponent(url));
+    if(!resp.ok) throw new Error('Network fetch failed');
+    const html = await resp.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    let title = doc.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
+                doc.querySelector('meta[name="og:title"]')?.getAttribute('content') ||
+                doc.querySelector('meta[name="twitter:title"]')?.getAttribute('content') ||
+                doc.querySelector('title')?.textContent || '';
+
+    title = (title || '').trim();
+    if(!title){
+      const h1 = doc.querySelector('h1');
+      if(h1) title = h1.textContent.trim();
+    }
+    if(!title) title = 'Title not found';
+
+    // canonical or provided url
+    const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || url;
+
+    current.title = title;
+    current.url = canonical;
+
+    headlineText.textContent = title;
+    linkText.textContent = canonical;
+    linkText.href = canonical;
+
+  } catch(err){
+    headlineText.textContent = 'Error: ' + (err.message || err);
+    linkText.textContent = url;
+    current = { title: '', url };
+  }
+}
+
+// clipboard helpers
+async function writeClipboard(text){
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch(e){ return false; }
+}
+
+// BUTTONS
+extractBtn.addEventListener('click', ()=> extractFromUrl(input.value.trim()));
+pasteBtn.addEventListener('click', async ()=>{
+  try {
+    const text = await navigator.clipboard.readText();
+    input.value = text || input.value;
+  } catch(e){
+    alert('Cannot read clipboard. Try long-press paste or grant permission.');
+  }
+});
+
+copyHeadlineBtn.addEventListener('click', async ()=>{
+  const t = current.title || headlineText.textContent;
+  if(!t) return alert('No headline to copy');
+  const ok = await writeClipboard(t);
+  if(ok) alert('Headline copied');
+  else prompt('Copy this headline:', t);
+});
+
+copyPlainBtn.addEventListener('click', async ()=>{
+  const t = current.title || headlineText.textContent;
+  const u = current.url || linkText.textContent;
+  const text = t + '\n' + u;
+  const ok = await writeClipboard(text);
+  if(ok) alert('Copied headline + link');
+  else prompt('Copy text:', text);
+});
+
+copyHtmlBtn.addEventListener('click', async ()=>{
+  const t = current.title || headlineText.textContent;
+  const u = current.url || linkText.textContent;
+  const html = `<a href="${u}" target="_blank">${t}</a>`;
+  const ok = await writeClipboard(html);
+  if(ok) alert('Copied HTML link');
+  else prompt('Copy HTML:', html);
+});
+
+openLinkBtn.addEventListener('click', ()=>{
+  const u = current.url || linkText.textContent;
+  if(u) window.open(u, '_blank');
+});
+
+saveItemBtn.addEventListener('click', ()=>{
+  const t = current.title || headlineText.textContent;
+  const u = current.url || linkText.textContent;
+  if(!t || !u){ return alert('No headline to save'); }
+  const items = loadItems();
+  // prevent exact duplicates (same url)
+  if(!items.some(it=>it.url === u)){
+    items.unshift({ title: t, url: u }); // newest first
+    saveItems(items);
+    renderTable();
+    alert('Saved to list');
+  } else {
+    alert('Already in list');
+  }
+});
+
+// table action (delegate)
+itemsTableBody.addEventListener('click', (ev)=>{
+  const btn = ev.target.closest('button');
+  if(!btn) return;
+  const idx = Number(btn.dataset.idx);
+  const action = btn.dataset.action;
+  const items = loadItems();
+  if(action === 'copy'){
+    const it = items[idx];
+    if(it) {
+      writeClipboard(it.title + '\n' + it.url).then(ok=>{
+        if(ok) alert('Copied item to clipboard');
+        else prompt('Copy text:', it.title + '\n' + it.url);
+      });
+    }
+  } else if(action === 'delete'){
+    if(!confirm('Delete this item?')) return;
+    items.splice(idx,1);
+    saveItems(items);
+    renderTable();
+  }
+});
+
+// CSV download
+downloadCsvBtn.addEventListener('click', ()=>{
+  const items = loadItems();
+  if(!items.length) return alert('No items to download');
+  let csv = 'Title,Link\n';
+  items.forEach(it=>{
+    const t = '"'+ String(it.title).replace(/"/g,'""') +'"';
+    const u = '"'+ String(it.url).replace(/"/g,'""') +'"';
+    csv += t + ',' + u + '\n';
+  });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'headlines.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+// Clear all
+clearAllBtn.addEventListener('click', ()=>{
+  if(!confirm('Clear all saved headlines?')) return;
+  localStorage.removeItem('hc_items');
+  renderTable();
+});
+
+// initial render + service worker register
+renderTable();
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js').catch(()=>{});
+}
+
+// handle share target from manifest (if installed PWA)
+async function handlePendingSharedData(){
+  const params = new URLSearchParams(location.search);
+  const s = params.get('url') || params.get('shared-url') || params.get('text');
+  if(s){
+    input.value = s;
+    extractFromUrl(s);
+    history.replaceState({}, document.title, location.pathname);
+  }
+}
+handlePendingSharedData();
+
+</script>
+</body>
+</html>
