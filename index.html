@@ -330,7 +330,7 @@ copyAllHtmlBtn.addEventListener('click', async () => {
         const safeTitle = escapeHtml(it.title);
         const safeUrl = escapeHtml(it.url);
         
-        listItemsHtml += `<li data-url="${safeUrl}"><a href="${safeUrl}" target="_blank">${safeTitle}</a></li>\n`;
+        listItemsHtml += `<a href="${safeUrl}" target="_blank">${safeTitle}</a></li>\n`;
     });
 
     // 3. Construct the final HTML string
